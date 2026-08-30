@@ -84,7 +84,10 @@ both — plus content attributes and an HTML wrapper for the clean-copy path.
 Registered via `MarkdownEditorConfiguration.extensions`; unregistered syntax
 stays literal text. Extensions never emit ranges — the parser derives all
 geometry — and every parse cache keys on the registry fingerprint, so the
-registered set can change at runtime.
+registered set can change at runtime. `CalloutExtension` is the exception that
+proves the invariant: `> [!type]` is a built-in blockquote, so the extension
+has no fence; registering it restyles matching blockquotes as tinted titled
+boxes.
 
 **Invariant:** built-in constructs always classify first; an extension can
 never take text away from core markdown.

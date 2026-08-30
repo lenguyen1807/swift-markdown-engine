@@ -37,6 +37,12 @@ extension MarkdownStyler {
         return cache
     }()
 
+    private static let tableHitCache: NSCache<NSString, TableWikiLinkHitMap> = {
+        let cache = NSCache<NSString, TableWikiLinkHitMap>()
+        cache.countLimit = 2048
+        return cache
+    }()
+
     /// Pixel-level fingerprint of a theme color: its sRGB components resolved
     /// under `appearance`. NSColor descriptions are not sound identities —
     /// named dynamic colors describe by name only (two providers collide),
@@ -140,7 +146,7 @@ extension MarkdownStyler {
         ctx: StylingContext,
         appearance: NSAppearance,
         availableWidth: CGFloat
-    ) -> (image: NSImage, rendered: Bool) {
+    ) -> (image: NSImage, hits: TableWikiLinkHitMap, rendered: Bool) {
         let widthKey = Int(availableWidth.rounded())
         // The extension registry is part of the key: `==x==` in a cell renders
         // highlighted under one config and literal under another — those must
@@ -148,9 +154,10 @@ extension MarkdownStyler {
         let extensionKey = ctx.configuration.extensionRegistry.fingerprint
         let key = (themeKeyPrefix(ctx: ctx, appearance: appearance) + "|x\(extensionKey)|w\(widthKey)|" + source) as NSString
         if let cached = tableImageCache.object(forKey: key) {
-            return (cached, false)
+            let hits = tableHitCache.object(forKey: key) ?? TableWikiLinkHitMap(hits: [])
+            return (cached, hits, false)
         }
-        let image = renderTable(
+        let rendered = renderTable(
             parsed,
             baseFont: ctx.baseFont,
             theme: ctx.configuration.theme,
@@ -160,8 +167,9 @@ extension MarkdownStyler {
             availableWidth: availableWidth,
             extensions: ctx.configuration.extensions
         )
-        tableImageCache.setObject(image, forKey: key)
-        return (image, true)
+        tableImageCache.setObject(rendered.image, forKey: key)
+        tableHitCache.setObject(rendered.hits, forKey: key)
+        return (rendered.image, rendered.hits, true)
     }
 
     static func styleTables(_ ctx: StylingContext) -> [StyledRange] {
@@ -239,7 +247,7 @@ extension MarkdownStyler {
             // only exceeds it when the per-column floors genuinely don't fit,
             // in which case the scrollable overlay below takes over.
             let containerWidth = effectiveContainerWidth(for: ctx)
-            let (image, rendered) = tableImage(
+            let (image, hits, rendered) = tableImage(
                 for: source,
                 parsed: parsed,
                 ctx: ctx,
@@ -271,6 +279,7 @@ extension MarkdownStyler {
                 alignment: .left,
                 mode: mode,
                 restyleOnWidthChange: true,
+                additionalAnchorAttrs: hits.hits.isEmpty ? [:] : [.tableWikiLinkHits: hits],
                 ctx: ctx,
                 attrs: &attrs
             )
@@ -482,9 +491,24 @@ extension MarkdownStyler {
                 }
             case .link(let range, _, _, _, _),
                  .image(let range, _, _, _),
-                 .wikiLink(let range, _, _, _),
                  .imageEmbed(let range, _, _):
                 appendPlain(range, font)
+            case .wikiLink(_, let name, let id, _):
+                let display = ns.substring(with: name).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !display.isEmpty else { break }
+                let identifier: String = {
+                    if let id, id.length > 0 {
+                        let raw = ns.substring(with: id).trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !raw.isEmpty { return raw }
+                    }
+                    return display
+                }()
+                out.append(NSAttributedString(string: display, attributes: [
+                    .font: font,
+                    .foregroundColor: theme.link,
+                    .underlineStyle: NSUnderlineStyle.single.rawValue,
+                    .link: identifier
+                ]))
             }
         }
     }
@@ -500,10 +524,10 @@ extension MarkdownStyler {
         appearance: NSAppearance,
         availableWidth: CGFloat,
         extensions: [any MarkdownExtension] = []
-    ) -> NSImage {
+    ) -> (image: NSImage, hits: TableWikiLinkHitMap) {
         let columnCount = table.alignments.count
-        let cellHPadding: CGFloat = 12
-        let cellVPadding: CGFloat = 6
+        let cellHPadding: CGFloat = 14
+        let cellVPadding: CGFloat = 8
         let borderWidth: CGFloat = 1
         // Resolve under the real appearance: `.withAlphaComponent()` freezes a dynamic color otherwise.
         func mutedColor(alpha: CGFloat) -> NSColor {
@@ -513,7 +537,7 @@ extension MarkdownStyler {
             }
             return resolved.withAlphaComponent(alpha)
         }
-        let borderColor = mutedColor(alpha: 0.5)
+        let borderColor = mutedColor(alpha: 0.35)
         let baseLineHeight: CGFloat = ceil(baseFont.ascender - baseFont.descender + baseFont.leading)
         let minColumnContentWidth: CGFloat = 16
 
@@ -653,10 +677,48 @@ extension MarkdownStyler {
         }
 
         let alignments = table.alignments
-        let headerFill = mutedColor(alpha: 0.08)
+        let headerFill = mutedColor(alpha: 0.12)
+
+        func alignedCell(_ s: NSAttributedString, col: Int) -> NSAttributedString {
+            let paragraph = NSMutableParagraphStyle()
+            switch alignments[col] {
+            case .left:   paragraph.alignment = .left
+            case .center: paragraph.alignment = .center
+            case .right:  paragraph.alignment = .right
+            }
+            paragraph.lineBreakMode = .byWordWrapping
+            let aligned = NSMutableAttributedString(attributedString: s)
+            aligned.addAttribute(
+                .paragraphStyle,
+                value: paragraph,
+                range: NSRange(location: 0, length: aligned.length)
+            )
+            return aligned
+        }
+
+        func cellDrawRect(col: Int, row: Int) -> NSRect {
+            let cellLeft = columnLeft[col] + cellHPadding
+            let cellRight = columnLeft[col + 1] - borderWidth - cellHPadding
+            return NSRect(
+                x: cellLeft,
+                y: rowTop[row] + cellVPadding,
+                width: cellRight - cellLeft,
+                height: rowContentHeights[row]
+            )
+        }
+
+        var wikiHits: [TableWikiLinkHitMap.Hit] = []
+        for (col, cell) in headerCells.enumerated() where col < columnCount {
+            wikiHits.append(contentsOf: wikiLinkHits(in: alignedCell(cell, col: col), drawRect: cellDrawRect(col: col, row: 0)))
+        }
+        for (rowIdx, row) in bodyCells.enumerated() {
+            for (col, cell) in row.enumerated() where col < columnCount {
+                wikiHits.append(contentsOf: wikiLinkHits(in: alignedCell(cell, col: col), drawRect: cellDrawRect(col: col, row: rowIdx + 1)))
+            }
+        }
 
         // Flipped image so AppKit handles the y-flip; a manual transform mirror would flip glyphs too.
-        return NSImage(size: size, flipped: true) { _ in
+        let image = NSImage(size: size, flipped: true) { _ in
             // Header row fill
             headerFill.setFill()
             NSBezierPath(rect: NSRect(
@@ -694,31 +756,11 @@ extension MarkdownStyler {
 
             func drawCell(_ s: NSAttributedString, col: Int, row: Int) {
                 guard col < columnCount else { return }
-                let cellLeft = columnLeft[col] + cellHPadding
-                let cellRight = columnLeft[col + 1] - borderWidth - cellHPadding
-                let cellContentWidth = cellRight - cellLeft
-                // Align via NSParagraphStyle; word-wrap fills the row height
-                // measured above (long words fall back to character breaks).
-                let paragraph = NSMutableParagraphStyle()
-                switch alignments[col] {
-                case .left:   paragraph.alignment = .left
-                case .center: paragraph.alignment = .center
-                case .right:  paragraph.alignment = .right
-                }
-                paragraph.lineBreakMode = .byWordWrapping
-                let aligned = NSMutableAttributedString(attributedString: s)
-                aligned.addAttribute(
-                    .paragraphStyle,
-                    value: paragraph,
-                    range: NSRange(location: 0, length: aligned.length)
+                alignedCell(s, col: col).draw(
+                    with: cellDrawRect(col: col, row: row),
+                    options: [.usesLineFragmentOrigin],
+                    context: nil
                 )
-                let drawRect = NSRect(
-                    x: cellLeft,
-                    y: rowTop[row] + cellVPadding,
-                    width: cellContentWidth,
-                    height: rowContentHeights[row]
-                )
-                aligned.draw(with: drawRect, options: [.usesLineFragmentOrigin], context: nil)
             }
 
             for (col, cell) in headerCells.enumerated() {
@@ -731,6 +773,32 @@ extension MarkdownStyler {
             }
             return true
         }
+        return (image, TableWikiLinkHitMap(hits: wikiHits))
+    }
+
+    /// Wiki-link glyph rects in table-image coordinates.
+    static func wikiLinkHits(in cell: NSAttributedString, drawRect: NSRect) -> [TableWikiLinkHitMap.Hit] {
+        guard cell.length > 0, drawRect.width > 0, drawRect.height > 0 else { return [] }
+        let storage = NSTextStorage(attributedString: cell)
+        let manager = NSLayoutManager()
+        let container = NSTextContainer(size: drawRect.size)
+        container.lineFragmentPadding = 0
+        manager.addTextContainer(container)
+        storage.addLayoutManager(manager)
+        manager.ensureLayout(for: container)
+        var hits: [TableWikiLinkHitMap.Hit] = []
+        cell.enumerateAttribute(.link, in: NSRange(location: 0, length: cell.length)) { value, range, _ in
+            guard let identifier = value as? String, !identifier.isEmpty else { return }
+            var actual = NSRange(location: 0, length: 0)
+            let glyphs = manager.glyphRange(forCharacterRange: range, actualCharacterRange: &actual)
+            let rect = manager.boundingRect(forGlyphRange: glyphs, in: container)
+            guard rect.width > 0, rect.height > 0 else { return }
+            hits.append(TableWikiLinkHitMap.Hit(
+                rect: rect.offsetBy(dx: drawRect.minX, dy: drawRect.minY).insetBy(dx: -2, dy: -2),
+                identifier: identifier
+            ))
+        }
+        return hits
     }
 
     // MARK: - Scrollable table helpers
@@ -766,5 +834,26 @@ extension MarkdownStyler {
         hasher.combine(source)
         hasher.combine(occurrenceIndex)
         return hasher.finalize()
+    }
+}
+
+/// Wiki-link hit rects in a rendered table image's coordinate space.
+final class TableWikiLinkHitMap: NSObject, NSCopying, @unchecked Sendable {
+    struct Hit: Sendable {
+        var rect: CGRect
+        var identifier: String
+    }
+
+    let hits: [Hit]
+
+    init(hits: [Hit]) {
+        self.hits = hits
+        super.init()
+    }
+
+    func copy(with zone: NSZone? = nil) -> Any { self }
+
+    func identifier(at point: CGPoint) -> String? {
+        hits.first { $0.rect.contains(point) }?.identifier
     }
 }

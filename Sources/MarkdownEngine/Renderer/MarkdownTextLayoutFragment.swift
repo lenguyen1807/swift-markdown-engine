@@ -29,6 +29,14 @@ extension NSAttributedString.Key {
     /// Int nesting level (1-based) of a blockquote line; the fragment
     /// paints that many vertical bars in the left gutter.
     static let blockquoteLevel = NSAttributedString.Key("BlockquoteLevel")
+    /// String callout type (`note`, `warning`, …) on a `> [!type]` blockquote.
+    static let calloutType = NSAttributedString.Key("CalloutType")
+    /// String callout type on the hidden `[!type]` run; the fragment draws the
+    /// titled icon+label over that run while the caret is outside the block.
+    static let calloutTitle = NSAttributedString.Key("CalloutTitle")
+    /// `TableWikiLinkHitMap` on a collapsed table image — wiki-link rects in
+    /// image coordinates so a click can navigate instead of entering edit mode.
+    static let tableWikiLinkHits = NSAttributedString.Key("TableWikiLinkHits")
     /// Marks a bullet-list marker char (`-`/`*`/`+`) whose glyph is hidden so
     /// the fragment can paint a `•` in its place. Set to `true`.
     static let bulletMarker = NSAttributedString.Key("BulletListMarker")
@@ -127,6 +135,9 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
 
         // 6. Blockquote bars (left gutter, behind nothing — text is indented)
         drawBlockquoteBars(at: point, in: context)
+
+        // 7. Callout titles (icon + type label over hidden `[!type]`)
+        drawCalloutTitles(at: point, in: context)
     }
 
     // MARK: - Helpers
@@ -672,12 +683,68 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
             if let level = ts.attribute(.blockquoteLevel, at: docStart, effectiveRange: nil) as? Int {
                 // tb.origin.y is already relative to this layout fragment.
                 let barY = point.y + tb.origin.y
-                for i in 0..<level {
-                    let barX = leftEdge + CGFloat(i) * indentPerLevel + indentPerLevel * 0.25
+                if let type = ts.attribute(.calloutType, at: docStart, effectiveRange: nil) as? String {
+                    CalloutExtension.appearance(for: type).accent.setFill()
+                    let barX = leftEdge + indentPerLevel * 0.25
                     NSBezierPath(rect: CGRect(
                         x: barX, y: barY, width: barWidth, height: tb.height
                     )).fill()
+                } else {
+                    theme.mutedText.withAlphaComponent(0.5).setFill()
+                    for i in 0..<level {
+                        let barX = leftEdge + CGFloat(i) * indentPerLevel + indentPerLevel * 0.25
+                        NSBezierPath(rect: CGRect(
+                            x: barX, y: barY, width: barWidth, height: tb.height
+                        )).fill()
+                    }
                 }
+            }
+        }
+    }
+
+    // MARK: - Callout titles
+
+    /// Paint an SF Symbol + type label over the hidden `[!type]` run.
+    private func drawCalloutTitles(at point: CGPoint, in context: CGContext) {
+        guard let ts = textStorage, let range = fragmentNSRange, range.length > 0 else { return }
+
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+
+        let bodyFont = (textLayoutManager?.textContainer?.textView as? NativeTextView)?.baseFont
+            ?? .systemFont(ofSize: NSFont.systemFontSize)
+        let titleFont = NSFont.systemFont(ofSize: bodyFont.pointSize, weight: .semibold)
+        let symbolConfig = NSImage.SymbolConfiguration(pointSize: bodyFont.pointSize * 0.92, weight: .semibold)
+
+        ts.enumerateAttribute(.calloutTitle, in: range, options: []) { value, attrRange, _ in
+            guard let type = value as? String,
+                  let pos = drawPosition(forDocumentCharAt: attrRange.location, point: point) else { return }
+            let appearance = CalloutExtension.appearance(for: type)
+            let iconSize = bodyFont.pointSize * 0.95
+            let gap: CGFloat = 6
+            if let symbol = NSImage(systemSymbolName: appearance.symbolName, accessibilityDescription: nil)?
+                .withSymbolConfiguration(symbolConfig) {
+                symbol.isTemplate = true
+                let iconRect = CGRect(
+                    x: pos.x,
+                    y: pos.baselineY - iconSize + 2,
+                    width: iconSize,
+                    height: iconSize
+                )
+                appearance.accent.set()
+                symbol.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 1)
+                let labelOrigin = CGPoint(x: pos.x + iconSize + gap, y: pos.baselineY - titleFont.ascender)
+                (appearance.label as NSString).draw(
+                    at: labelOrigin,
+                    withAttributes: [.font: titleFont, .foregroundColor: appearance.accent]
+                )
+            } else {
+                let labelOrigin = CGPoint(x: pos.x, y: pos.baselineY - titleFont.ascender)
+                (appearance.label as NSString).draw(
+                    at: labelOrigin,
+                    withAttributes: [.font: titleFont, .foregroundColor: appearance.accent]
+                )
             }
         }
     }

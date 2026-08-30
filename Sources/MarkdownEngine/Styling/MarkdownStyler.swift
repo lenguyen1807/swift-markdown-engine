@@ -300,6 +300,7 @@ extension MarkdownStyler {
         alignment: NSTextAlignment,
         mode: RenderedStandaloneBlockMode,
         restyleOnWidthChange: Bool = false,
+        additionalAnchorAttrs: [NSAttributedString.Key: Any] = [:],
         ctx: StylingContext,
         attrs: inout [StyledRange]
     ) -> Bool {
@@ -309,9 +310,10 @@ extension MarkdownStyler {
         let baseLineHeight = layoutBridgeDefaultLineHeight(for: ctx.baseFont, using: ctx.layoutBridge)
         para.paragraphSpacingBefore = max(para.paragraphSpacingBefore, paragraphSpacingBefore)
         para.alignment = alignment
-        let widthChangeAnchorAttrs: [NSAttributedString.Key: Any] = restyleOnWidthChange
-            ? [.scrollableBlockFullRange: NSValue(range: paraRange)]
-            : [:]
+        var extraAnchorAttrs: [NSAttributedString.Key: Any] = additionalAnchorAttrs
+        if restyleOnWidthChange {
+            extraAnchorAttrs[.scrollableBlockFullRange] = NSValue(range: paraRange)
+        }
 
         switch mode {
         case .collapsedSource(let markerTexts):
@@ -325,7 +327,7 @@ extension MarkdownStyler {
                 paraRange: paraRange,
                 advanceWidth: imageBounds.width,
                 neededLineHeight: imageBounds.height,
-                extraAnchorAttrs: widthChangeAnchorAttrs,
+                extraAnchorAttrs: extraAnchorAttrs,
                 markerTexts: markerTexts,
                 ctx: ctx,
                 attrs: &attrs
@@ -334,7 +336,7 @@ extension MarkdownStyler {
         case .collapsedSourceScrollable(let markerTexts, let displayWidth, let sourceID):
             let scrollerStrip = MarkdownTextLayoutFragment.scrollableBlockScrollerStrip
             let totalHeight = imageBounds.height + scrollerStrip
-            var anchorAttrs = widthChangeAnchorAttrs
+            var anchorAttrs = extraAnchorAttrs
             anchorAttrs[.scrollableBlockNaturalWidth] = imageBounds.width
             anchorAttrs[.scrollableBlockSourceID] = sourceID
             anchorAttrs[.scrollableBlockTotalHeight] = totalHeight

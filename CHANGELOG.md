@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Callouts**: opt-in `CalloutExtension` restyles a blockquote whose first
+  line is Obsidian `> [!type]` as a tinted titled box. Markers hide while the
+  caret is outside and reveal muted while editing; unknown types keep their
+  name with a default color/icon. Register via
+  `configuration.extensions = [CalloutExtension()]`. Clean copy still emits a
+  `<blockquote>`. Fenced `:::` containers are unchanged — `>` is a built-in,
+  so callouts are a blockquote specialization rather than a fence.
+- **Table wiki-links**: `[[wiki-links]]` in rendered table cells now show as
+  the display name in the link color and navigate on click instead of entering
+  table source-edit mode. Wide-table overlays use the same hit map.
 - **Directive seam (parsing)**: opt-in named inline commands with typed
   arguments, for constructs that need a name and parameters rather than
   delimiters. A `MarkdownDirective` declares a name, a form — self-contained
@@ -54,6 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a larger mark climb toward the top of its line.
 
 ### Changed
+- Rendered tables: slightly more cell padding, softer separators, and a
+  stronger header-row fill so grids match a tuned editor theme.
 - An ordered list's painted number no longer reverts to the source digit under
   the caret or a selection. The number is positional, so in a run written
   `1./1./1.` a click inside a marker — or a select-all — flipped every number

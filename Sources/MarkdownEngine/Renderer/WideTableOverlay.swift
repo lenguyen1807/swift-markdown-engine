@@ -40,6 +40,9 @@ final class WideTableOverlay: NSScrollView {
     /// Weak parent ref for offset persistence + caret forwarding.
     weak var ownerTextView: NativeTextView?
 
+    /// Wiki-link rects in image coordinates; a hit navigates instead of editing.
+    var hitMap: TableWikiLinkHitMap?
+
     /// Table's left-edge offset (breakout: text-column left); scrollable space.
     var leftContentInset: CGFloat = 0 {
         didSet {
@@ -152,6 +155,17 @@ final class WideTableImageView: NSImageView {
             super.mouseDown(with: event)
             return
         }
+        let local = convert(event.locationInWindow, from: nil)
+        if let identifier = overlay.hitMap?.identifier(at: local),
+           let coord = textView.delegate as? NativeTextViewCoordinator {
+            textView.linkClickDidFire = true
+            textView.linkClickDidNavigate = true
+            coord.isWikiLinkActive = false
+            DispatchQueue.main.async {
+                coord.onLinkClick?(identifier)
+            }
+            return
+        }
         let location = overlay.anchorTextLocation
         let docLen = (textView.string as NSString).length
         guard location >= 0, location <= docLen else {
@@ -260,6 +274,7 @@ extension NativeTextView {
         storage.enumerateAttribute(.scrollableBlockSourceID, in: fullRange, options: []) { value, attrRange, _ in
             guard let sourceID = value as? Int,
                   let image = storage.attribute(.latexImage, at: attrRange.location, effectiveRange: nil) as? NSImage else { return }
+            let hits = storage.attribute(.tableWikiLinkHits, at: attrRange.location, effectiveRange: nil) as? TableWikiLinkHitMap
             seenSourceIDs.insert(sourceID)
 
             if let start = tcs.location(tcs.documentRange.location, offsetBy: attrRange.location),
@@ -292,6 +307,7 @@ extension NativeTextView {
                 existing.leftContentInset = leftContentInset
                 existing.updateImage(image)
                 existing.anchorTextLocation = attrRange.location
+                existing.hitMap = hits
             } else {
                 let overlay = WideTableOverlay(
                     sourceID: sourceID, image: image,
@@ -299,6 +315,7 @@ extension NativeTextView {
                 )
                 overlay.frame = overlayFrame
                 overlay.leftContentInset = leftContentInset
+                overlay.hitMap = hits
                 host.addSubview(overlay)
                 wideTableOverlays[sourceID] = overlay
                 let savedOffset = tableHorizontalScrollOffsets[sourceID] ?? 0
