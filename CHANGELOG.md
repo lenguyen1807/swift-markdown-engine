@@ -14,7 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   name with a default color/icon. Register via
   `configuration.extensions = [CalloutExtension()]`. Clean copy still emits a
   `<blockquote>`. Fenced `:::` containers are unchanged — `>` is a built-in,
-  so callouts are a blockquote specialization rather than a fence.
+  so callouts are a blockquote specialization rather than a fence. The box
+  fills the reading column as one rounded rectangle with a left accent bar;
+  it does not reuse `==highlight==`'s glyph-run background, which painted
+  striped patches behind each line.
 - **Table wiki-links**: `[[wiki-links]]` in rendered table cells now show as
   the display name in the link color and navigate on click instead of entering
   table source-edit mode. Wide-table overlays use the same hit map.
@@ -64,6 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a larger mark climb toward the top of its line.
 
 ### Changed
+- Inline `$…$` treats `[ ] ( )` as mathy, so `$Z[i,j]$` and `$O(BFD)$` render
+  as math instead of leftover dollars around an incomplete-link look.
 - Rendered tables: slightly more cell padding, softer separators, and a
   stronger header-row fill so grids match a tuned editor theme.
 - An ordered list's painted number no longer reverts to the source digit under

@@ -565,9 +565,14 @@ enum InlineParser {
         return i == n
     }
 
-    /// Count of "mathy" characters `\ ^ _ { } = + - * / < >`.
+    /// Count of "mathy" characters `\ ^ _ { } [ ] ( ) = + - * / < >`.
+    /// Brackets and parens catch indexing and calls (`$Z[i,j]$`, `$O(BFD)$`)
+    /// that have no TeX commands; they are not currency.
     private static func mathyCharCount(_ s: String) -> Int {
-        let mathy: Set<unichar> = [0x5C, 0x5E, 0x5F, 0x7B, 0x7D, 0x3D, 0x2B, 0x2D, 0x2A, 0x2F, 0x3C, 0x3E]
+        let mathy: Set<unichar> = [
+            0x5C, 0x5E, 0x5F, 0x7B, 0x7D, 0x5B, 0x5D, 0x28, 0x29,
+            0x3D, 0x2B, 0x2D, 0x2A, 0x2F, 0x3C, 0x3E
+        ]
         var count = 0
         for u in s.utf16 where mathy.contains(u) { count += 1 }
         return count

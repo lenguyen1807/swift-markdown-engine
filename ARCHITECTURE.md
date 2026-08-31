@@ -87,7 +87,9 @@ geometry — and every parse cache keys on the registry fingerprint, so the
 registered set can change at runtime. `CalloutExtension` is the exception that
 proves the invariant: `> [!type]` is a built-in blockquote, so the extension
 has no fence; registering it restyles matching blockquotes as tinted titled
-boxes.
+boxes. The fragment paints a full-column rounded box from `.calloutType`; it
+does not reuse `.markdownBlockBackground` (that fill is the glyph-run highlight
+used by `==mark==`).
 
 **Invariant:** built-in constructs always classify first; an extension can
 never take text away from core markdown.

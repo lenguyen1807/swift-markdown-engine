@@ -104,6 +104,9 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         for fill in blockBackgroundFills(at: .zero) {
             bounds = bounds.union(fill.rect)
         }
+        for fill in calloutBoxFills(at: .zero) {
+            bounds = bounds.union(fill.rect)
+        }
         return bounds
     }
 
@@ -112,6 +115,9 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
     override func draw(at point: CGPoint, in context: CGContext) {
         // 1. Code-block backgrounds (behind text)
         drawCodeBlockBackground(at: point, in: context)
+
+        // 1a. Callout boxes (full column, behind text and highlight fills)
+        drawCalloutBoxes(at: point, in: context)
 
         // 1b. Line-box fills (`==highlight==` and friends), behind text
         drawBlockBackgrounds(at: point, in: context)
@@ -398,6 +404,166 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         }
     }
 
+    // MARK: - Callout boxes
+
+    struct CalloutBoxFill {
+        let rect: CGRect
+        let color: NSColor
+        let accent: NSColor
+        let roundTop: Bool
+        let roundBottom: Bool
+    }
+
+    /// Full-column box behind every callout line in this fragment.
+    /// Geometry is assertable headlessly, the way `blockBackgroundFills(at:)` is.
+    func calloutBoxFills(at point: CGPoint) -> [CalloutBoxFill] {
+        guard let ts = textStorage, let range = fragmentNSRange, range.length > 0 else { return [] }
+        var any = false
+        ts.enumerateAttribute(.calloutType, in: range, options: []) { value, _, stop in
+            if value is String { any = true; stop.pointee = true }
+        }
+        guard any else { return [] }
+
+        let containerWidth = textLayoutManager?.textContainer?.size.width ?? layoutFragmentFrame.width
+        let leftEdge = point.x - layoutFragmentFrame.origin.x
+        let inset = CalloutExtension.boxHorizontalInset
+        let pad = CalloutExtension.boxVerticalPad
+        let ns = ts.string as NSString
+        let len = ns.length
+        let fragLocation = range.location
+        var fills: [CalloutBoxFill] = []
+
+        for (index, lineFragment) in textLineFragments.enumerated() {
+            let lr = lineFragment.characterRange
+            let docStart = fragLocation + lr.location
+            guard docStart < ts.length else { continue }
+            guard let type = ts.attribute(.calloutType, at: docStart, effectiveRange: nil) as? String else {
+                continue
+            }
+            let appearance = CalloutExtension.appearance(for: type)
+            var (roundTop, roundBottom) = calloutLineEdges(
+                docStart: docStart, type: type, ns: ns, length: len, ts: ts
+            )
+            // Soft-wrapped visual lines of the same source line are one box, not
+            // a stack of padded mini-boxes.
+            if index > 0 {
+                let prevStart = fragLocation + textLineFragments[index - 1].characterRange.location
+                if prevStart < ts.length,
+                   let prevType = ts.attribute(.calloutType, at: prevStart, effectiveRange: nil) as? String,
+                   prevType == type {
+                    roundTop = false
+                }
+            }
+            if index + 1 < textLineFragments.count {
+                let nextStart = fragLocation + textLineFragments[index + 1].characterRange.location
+                if nextStart < ts.length,
+                   let nextType = ts.attribute(.calloutType, at: nextStart, effectiveRange: nil) as? String,
+                   nextType == type {
+                    roundBottom = false
+                }
+            }
+            let tb = lineFragment.typographicBounds
+            var rect = CGRect(
+                x: leftEdge + inset,
+                y: point.y + tb.origin.y,
+                width: max(0, containerWidth - 2 * inset),
+                height: tb.height
+            )
+            if roundTop {
+                rect.origin.y -= pad
+                rect.size.height += pad
+            }
+            if roundBottom {
+                rect.size.height += pad
+            }
+            guard rect.width > 0, rect.height > 0 else { continue }
+            fills.append(CalloutBoxFill(
+                rect: rect,
+                color: appearance.background,
+                accent: appearance.accent,
+                roundTop: roundTop,
+                roundBottom: roundBottom
+            ))
+        }
+        return fills
+    }
+
+    private func calloutLineEdges(
+        docStart: Int, type: String, ns: NSString, length: Int, ts: NSTextStorage
+    ) -> (roundTop: Bool, roundBottom: Bool) {
+        func typeAt(_ i: Int) -> String? {
+            guard i >= 0, i < length else { return nil }
+            return ts.attribute(.calloutType, at: i, effectiveRange: nil) as? String
+        }
+        var prev = docStart - 1
+        while prev >= 0 {
+            let ch = ns.character(at: prev)
+            if ch == 0x0A || ch == 0x0D { prev -= 1; continue }
+            break
+        }
+        let roundTop = typeAt(prev) != type
+
+        let line = ns.lineRange(for: NSRange(location: docStart, length: 0))
+        var next = NSMaxRange(line)
+        while next < length {
+            let ch = ns.character(at: next)
+            if ch == 0x0A || ch == 0x0D { next += 1; continue }
+            break
+        }
+        let roundBottom = next >= length || typeAt(next) != type
+        return (roundTop, roundBottom)
+    }
+
+    private func drawCalloutBoxes(at point: CGPoint, in context: CGContext) {
+        let fills = calloutBoxFills(at: point)
+        guard !fills.isEmpty else { return }
+
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+
+        let radius = CalloutExtension.boxCornerRadius
+        let barWidth = Self.blockquoteBarWidth
+        for fill in fills {
+            let path = calloutShape(rect: fill.rect, roundTop: fill.roundTop, roundBottom: fill.roundBottom, radius: radius)
+            fill.color.setFill()
+            path.fill()
+            NSGraphicsContext.saveGraphicsState()
+            path.addClip()
+            fill.accent.setFill()
+            NSBezierPath(rect: CGRect(
+                x: fill.rect.minX,
+                y: fill.rect.minY,
+                width: barWidth,
+                height: fill.rect.height
+            )).fill()
+            NSGraphicsContext.restoreGraphicsState()
+        }
+    }
+
+    private func calloutShape(rect: CGRect, roundTop: Bool, roundBottom: Bool, radius: CGFloat) -> NSBezierPath {
+        let r = min(radius, max(0, rect.height / 2), max(0, rect.width / 2))
+        guard r > 0.5, roundTop || roundBottom else {
+            return NSBezierPath(rect: rect)
+        }
+        if roundTop && roundBottom {
+            return NSBezierPath(roundedRect: rect, xRadius: r, yRadius: r)
+        }
+        let path = NSBezierPath(roundedRect: rect, xRadius: r, yRadius: r)
+        if roundTop {
+            path.appendRect(CGRect(
+                x: rect.minX, y: rect.minY + r,
+                width: rect.width, height: max(0, rect.height - r)
+            ))
+        } else {
+            path.appendRect(CGRect(
+                x: rect.minX, y: rect.minY,
+                width: rect.width, height: max(0, rect.height - r)
+            ))
+        }
+        return path
+    }
+
     // MARK: - LaTeX / Block Image Helpers
 
     /// Compute the draw rect for a block image at `attrRange` using `point` as
@@ -681,22 +847,18 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
             guard docStart < ts.length else { continue }
             let tb = lineFragment.typographicBounds
             if let level = ts.attribute(.blockquoteLevel, at: docStart, effectiveRange: nil) as? Int {
+                // Callouts paint their own accent bar as part of the box.
+                if ts.attribute(.calloutType, at: docStart, effectiveRange: nil) is String {
+                    continue
+                }
                 // tb.origin.y is already relative to this layout fragment.
                 let barY = point.y + tb.origin.y
-                if let type = ts.attribute(.calloutType, at: docStart, effectiveRange: nil) as? String {
-                    CalloutExtension.appearance(for: type).accent.setFill()
-                    let barX = leftEdge + indentPerLevel * 0.25
+                theme.mutedText.withAlphaComponent(0.5).setFill()
+                for i in 0..<level {
+                    let barX = leftEdge + CGFloat(i) * indentPerLevel + indentPerLevel * 0.25
                     NSBezierPath(rect: CGRect(
                         x: barX, y: barY, width: barWidth, height: tb.height
                     )).fill()
-                } else {
-                    theme.mutedText.withAlphaComponent(0.5).setFill()
-                    for i in 0..<level {
-                        let barX = leftEdge + CGFloat(i) * indentPerLevel + indentPerLevel * 0.25
-                        NSBezierPath(rect: CGRect(
-                            x: barX, y: barY, width: barWidth, height: tb.height
-                        )).fill()
-                    }
                 }
             }
         }
@@ -722,7 +884,7 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
                   let pos = drawPosition(forDocumentCharAt: attrRange.location, point: point) else { return }
             let appearance = CalloutExtension.appearance(for: type)
             let iconSize = bodyFont.pointSize * 0.95
-            let gap: CGFloat = 6
+            let gap = CalloutExtension.titleIconGap
             if let symbol = NSImage(systemSymbolName: appearance.symbolName, accessibilityDescription: nil)?
                 .withSymbolConfiguration(symbolConfig) {
                 symbol.isTemplate = true

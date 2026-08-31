@@ -708,11 +708,11 @@ enum MarkdownASTStyler {
                 band.length -= 1
             }
             if band.length > 0 {
-                let appearance = CalloutExtension.appearance(for: callout.type)
-                attrs.append((band, [
-                    .markdownBlockBackground: appearance.background,
-                    .calloutType: callout.type
-                ]))
+                // Background is painted as a full-column box from `.calloutType`
+                // (see MarkdownTextLayoutFragment). Do not use `.markdownBlockBackground`
+                // here: that fill is the glyph-run highlight used by `==mark==`, and on
+                // a callout it comes out as striped per-line patches behind the text.
+                attrs.append((band, [.calloutType: callout.type]))
             }
         }
         let revealCallout = callout != nil && ctx.isActive(range)
@@ -757,7 +757,7 @@ enum MarkdownASTStyler {
             para.maximumLineHeight = lineHeight
             // Inner quote lines stay tight (0); the LAST line gets the normal
             para.paragraphSpacing = (lineEnd >= end) ? ctx.baseParagraphSpacing : 0
-            para.paragraphSpacingBefore = (callout != nil && isFirstQuotedLine) ? 4 : 0
+            para.paragraphSpacingBefore = (callout != nil && isFirstQuotedLine) ? 8 : 0
             attrs.append((ctx.ns.paragraphRange(for: tokenRange), [.paragraphStyle: para]))
 
             let lineReveal = revealCallout || (callout == nil && ctx.isActive(tokenRange))
@@ -777,7 +777,8 @@ enum MarkdownASTStyler {
                 } else {
                     attrs.append((callout.markerRange, [
                         .foregroundColor: NSColor.clear,
-                        .calloutTitle: callout.type
+                        .calloutTitle: callout.type,
+                        .underlineStyle: 0
                     ]))
                 }
             }
@@ -851,12 +852,25 @@ enum MarkdownASTStyler {
         guard ctx.extensionsByID[CalloutExtension.identifier] != nil,
               let callout = firstCalloutMarker(in: range, ctx: ctx) else { return }
         if ctx.isActive(range) {
-            attrs.append((callout.markerRange, [.foregroundColor: ctx.theme.mutedText]))
-        } else {
             attrs.append((callout.markerRange, [
-                .foregroundColor: NSColor.clear,
-                .calloutTitle: callout.type
+                .foregroundColor: ctx.theme.mutedText,
+                .underlineStyle: 0
             ]))
+        } else {
+            let appearance = CalloutExtension.appearance(for: callout.type)
+            let titleW = CalloutExtension.titleWidth(for: appearance, bodyPointSize: ctx.baseFont.pointSize)
+            let markerText = ctx.ns.substring(with: callout.markerRange) as NSString
+            let hiddenW = markerText.size(withAttributes: [.font: ctx.inlineMarkerFont]).width
+            var titleAttrs: [NSAttributedString.Key: Any] = [
+                .foregroundColor: NSColor.clear,
+                .calloutTitle: callout.type,
+                .font: ctx.inlineMarkerFont,
+                .underlineStyle: 0
+            ]
+            if callout.markerRange.length > 0, abs(titleW - hiddenW) > 0.01 {
+                titleAttrs[.kern] = (titleW - hiddenW) / CGFloat(callout.markerRange.length)
+            }
+            attrs.append((callout.markerRange, titleAttrs))
         }
     }
 

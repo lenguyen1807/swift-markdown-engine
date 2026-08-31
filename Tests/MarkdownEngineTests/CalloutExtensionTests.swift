@@ -84,8 +84,11 @@ struct CalloutExtensionTests {
         #expect(color(in: styled, at: markerPos) == NSColor.clear)
         let bodyPos = (text as NSString).range(of: "Body").location
         #expect(styled.contains { range, a in
-            NSLocationInRange(bodyPos, range) && a[.markdownBlockBackground] != nil
+            NSLocationInRange(bodyPos, range) && (a[.calloutType] as? String) == "note"
         })
+        #expect(styled.contains { range, a in
+            NSLocationInRange(bodyPos, range) && a[.markdownBlockBackground] != nil
+        } == false)
     }
 
     @Test("caret inside a callout reveals the source markers")
@@ -105,5 +108,16 @@ struct CalloutExtensionTests {
         let html = MarkdownHTMLRenderer.html(from: md, extensions: [CalloutExtension()])
         #expect(html.contains("<blockquote>"))
         #expect(html.contains("<strong>there</strong>"))
+    }
+
+    @Test("inactive title run kerns to the painted icon+label width")
+    func inactiveTitleReservesWidth() {
+        let text = "> [!note]\n> Body"
+        let styled = attrs(text, caret: -1)
+        let marker = (text as NSString).range(of: "[!note]")
+        let titleRun = styled.last { range, a in
+            NSLocationInRange(marker.location, range) && a[.calloutTitle] != nil
+        }
+        #expect(titleRun?.attributes[.kern] as? CGFloat != nil)
     }
 }

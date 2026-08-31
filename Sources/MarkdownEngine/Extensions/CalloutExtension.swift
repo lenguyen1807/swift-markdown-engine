@@ -137,9 +137,22 @@ public struct CalloutExtension: MarkdownExtension {
             NSColor(name: nil) { appearance in
                 let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
                 let c = isDark ? dark : light
-                return NSColor(srgbRed: c.0, green: c.1, blue: c.2, alpha: isDark ? 0.18 : 0.12)
+                // Full-column box fill; keep this quieter than a glyph-run highlight.
+                return NSColor(srgbRed: c.0, green: c.1, blue: c.2, alpha: isDark ? 0.14 : 0.10)
             }
         }
+    }
+
+    static let titleIconGap: CGFloat = 6
+    static let boxCornerRadius: CGFloat = 8
+    static let boxHorizontalInset: CGFloat = 2
+    static let boxVerticalPad: CGFloat = 5
+
+    /// Width of the painted icon + label so the hidden `[!type]` run can kern to it.
+    static func titleWidth(for appearance: CalloutAppearance, bodyPointSize: CGFloat) -> CGFloat {
+        let titleFont = NSFont.systemFont(ofSize: bodyPointSize, weight: .semibold)
+        let labelWidth = (appearance.label as NSString).size(withAttributes: [.font: titleFont]).width
+        return bodyPointSize * 0.95 + titleIconGap + labelWidth
     }
 }
 
