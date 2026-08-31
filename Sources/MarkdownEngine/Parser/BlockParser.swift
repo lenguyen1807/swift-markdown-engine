@@ -318,8 +318,24 @@ enum BlockParser {
                 i += 1
 
             } else if isBlockquote(line) {
+                // Consecutive `>` lines, plus CommonMark lazy continuation:
+                // an unquoted paragraph-like line stays in the quote so a
+                // callout can wrap `$$ … $$` even when the formula lines omit `>`.
                 var end = i
-                while end + 1 < lines.count, isBlockquote(lineText(end + 1)) { end += 1 }
+                while end + 1 < lines.count {
+                    let next = lineText(end + 1)
+                    if isBlockquote(next) {
+                        end += 1
+                        continue
+                    }
+                    if isBlank(next) { break }
+                    if isHeading(next) || isThematicBreak(next) || isListItem(next) { break }
+                    if isFence(next), fenceCloseIndex(from: end + 1) != nil { break }
+                    if isTableRow(next), end + 2 < lines.count, isTableSeparator(lineText(end + 2)) { break }
+                    if isBlockLatexOpen(next), blockLatexCloseIndex(from: end + 1) != nil { break }
+                    if registry.blockEntry(opening: next) != nil { break }
+                    end += 1
+                }
                 blocks.append(Block(kind: .blockquote, range: union(lines[i...end])))
                 i = end + 1
 

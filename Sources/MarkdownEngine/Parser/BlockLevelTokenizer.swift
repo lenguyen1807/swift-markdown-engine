@@ -138,6 +138,9 @@ enum BlockLevelTokenizer {
             if nextStart <= lineStart { break }
             lineStart = nextStart
         }
+        // `$$…$$` nested in the quote (including lazy-continuation formula lines)
+        // is display math, not quote body. Tokens are relative to this substring.
+        tokens.append(contentsOf: blockLatex(in: s))
         return tokens
     }
 

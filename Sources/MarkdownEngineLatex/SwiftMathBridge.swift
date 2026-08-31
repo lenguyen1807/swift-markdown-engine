@@ -206,7 +206,10 @@ public final class SwiftMathBridge: LatexRenderer, @unchecked Sendable {
         mathLabel.fontSize = fontSize
         mathLabel.textColor = textColor
         mathLabel.textAlignment = .left
-        mathLabel.labelMode = .text
+        mathLabel.labelMode = latex.contains(where: \.isNewline) || latex.contains("\\frac")
+            ? .display : .text
+        mathLabel.wantsLayer = true
+        mathLabel.layer?.backgroundColor = NSColor.clear.cgColor
 
         // Latin Modern Math gives the cleanest LaTeX glyphs at typical sizes.
         if let mathFont = MTFontManager().font(withName: "latinmodern-math", size: fontSize) {

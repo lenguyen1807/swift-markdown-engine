@@ -20,18 +20,18 @@ extension MarkdownStyler {
             if MarkdownDetection.isInsideCodeBlock(range: token.range, codeTokens: ctx.codeTokens) { continue }
             let isActive = ctx.activeTokenIndices.contains(idx)
             let rawLatexContent = ctx.nsText.substring(with: token.contentRange)
-            let latexContent = rawLatexContent.trimmingCharacters(in: .whitespacesAndNewlines)
 
             attrs.append((token.range, [NSAttributedString.Key.spellingState: 0]))
 
             guard token.standaloneParagraphRange(in: ctx.nsText) != nil else { continue }
 
             let latexFontSize = HeadingHelpers.latexFontSize(for: token, headings: [], baseFont: ctx.baseFont)  // block $$ is never inside a heading
+            let renderSource = dequoteBlockquotePrefixes(rawLatexContent)
 
             if isActive {
                 appendSecondaryMarkers(for: token, to: &attrs, theme: ctx.configuration.theme)
-            } else if !latexContent.isEmpty,
-                      let entry = ctx.services.latex.render(latex: latexContent, fontSize: latexFontSize, theme: ctx.configuration.theme) {
+            } else if !renderSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      let entry = ctx.services.latex.render(latex: renderSource, fontSize: latexFontSize, theme: ctx.configuration.theme) {
                 _ = appendRenderedStandaloneBlock(
                     for: token,
                     rawContent: rawLatexContent,
@@ -72,7 +72,9 @@ extension MarkdownStyler {
         // scope-slicing these is exact; built once, not per formula.
         let tableRanges = ctx.scoped(ctx.tableIndexed).map { $0.token.range }
         // Quote lines mute their text via foregroundColor, which the LaTeX *image* ignores — render it in mutedText instead so it matches the grey.
+        // Callout bodies use body text, so keep the theme's latex colors there.
         let blockquoteRanges = MarkdownStyler.StylingContext.indexed(ctx.tokens, .blockquote).map { $0.token.range }
+        let calloutQuoteRanges = calloutEnclosingRanges(blockquoteRanges: blockquoteRanges, ns: ctx.nsText, extensions: ctx.configuration.extensionsByID)
         // Built once, not re-scanned per formula (latexFontSize was O(#latex × #tokens)).
         let headings = ctx.scoped(MarkdownStyler.StylingContext.indexed(ctx.tokens, .heading)).map { $0.token }
         // Each textWidth is a CoreText measurement; the two "$" marker widths are
@@ -107,7 +109,8 @@ extension MarkdownStyler {
                 }
             } else {
                 var renderTheme = ctx.configuration.theme
-                if blockquoteRanges.contains(where: { NSLocationInRange(token.range.location, $0) }) {
+                if blockquoteRanges.contains(where: { NSLocationInRange(token.range.location, $0) }),
+                   !calloutQuoteRanges.contains(where: { NSLocationInRange(token.range.location, $0) }) {
                     renderTheme.latexLightModeText = renderTheme.mutedText
                     renderTheme.latexDarkModeText = renderTheme.mutedText
                 }
@@ -156,5 +159,94 @@ extension MarkdownStyler {
             }
         }
         return attrs
+    }
+
+    /// Strip `>` quote prefixes from each line so nested `$$` in a callout
+    /// typesets as math instead of `> \max(...)`.
+    static func dequoteBlockquotePrefixes(_ raw: String) -> String {
+        let ns = raw as NSString
+        var lineStart = 0
+        let len = ns.length
+        var lines: [String] = []
+        while lineStart <= len {
+            if lineStart == len {
+                if raw.hasSuffix("\n") { lines.append("") }
+                break
+            }
+            var lineEnd = lineStart
+            while lineEnd < len {
+                let ch = ns.character(at: lineEnd)
+                if ch == 0x0A || ch == 0x0D { break }
+                lineEnd += 1
+            }
+            var i = lineStart
+            var indent = 0
+            while i < lineEnd, indent < 3 {
+                let ch = ns.character(at: i)
+                guard ch == 0x20 || ch == 0x09 else { break }
+                i += 1; indent += 1
+            }
+            while i < lineEnd, ns.character(at: i) == 0x3E {
+                i += 1
+                if i < lineEnd {
+                    let ch = ns.character(at: i)
+                    if ch == 0x20 || ch == 0x09 { i += 1 }
+                }
+            }
+            lines.append(ns.substring(with: NSRange(location: i, length: lineEnd - i)))
+            lineStart = lineEnd
+            if lineStart < len, ns.character(at: lineStart) == 0x0D { lineStart += 1 }
+            if lineStart < len, ns.character(at: lineStart) == 0x0A { lineStart += 1 }
+            if lineStart >= len { break }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Consecutive quote-line ranges that belong to a `> [!type]` callout.
+    private static func calloutEnclosingRanges(
+        blockquoteRanges: [NSRange],
+        ns: NSString,
+        extensions: [String: any MarkdownExtension]
+    ) -> [NSRange] {
+        guard extensions[CalloutExtension.identifier] != nil, !blockquoteRanges.isEmpty else { return [] }
+        let ordered = blockquoteRanges.sorted { $0.location < $1.location }
+        var result: [NSRange] = []
+        var run: [NSRange] = []
+        func flush() {
+            guard let first = run.first else { return }
+            if CalloutExtension.marker(in: ns, contentRange: dequotedLineContent(first, ns: ns)) != nil {
+                result.append(contentsOf: run)
+            }
+            run.removeAll(keepingCapacity: true)
+        }
+        for range in ordered {
+            if let last = run.last, NSMaxRange(last) >= range.location - 2 {
+                run.append(range)
+            } else {
+                flush()
+                run = [range]
+            }
+        }
+        flush()
+        return result
+    }
+
+    private static func dequotedLineContent(_ range: NSRange, ns: NSString) -> NSRange {
+        var i = range.location
+        let end = NSMaxRange(range)
+        var indent = 0
+        while i < end, indent < 3 {
+            let ch = ns.character(at: i)
+            guard ch == 0x20 || ch == 0x09 else { break }
+            i += 1; indent += 1
+        }
+        while i < end, ns.character(at: i) == 0x3E {
+            i += 1
+            if i < end {
+                let ch = ns.character(at: i)
+                if ch == 0x20 || ch == 0x09 { i += 1 }
+            }
+        }
+        return NSRange(location: i, length: max(0, end - i))
     }
 }

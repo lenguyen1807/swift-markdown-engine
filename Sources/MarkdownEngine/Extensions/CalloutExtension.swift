@@ -57,10 +57,16 @@ public struct CalloutExtension: MarkdownExtension {
             j += 1
         }
         guard j < end, ns.character(at: j) == 0x5D, j > typeStart else { return nil }
+        var markerEnd = j + 1
+        // Obsidian fold marker immediately after the type: `> [!warning]+`.
+        if markerEnd < end {
+            let fold = ns.character(at: markerEnd)
+            if fold == 0x2B || fold == 0x2D { markerEnd += 1 }
+        }
         let type = ns.substring(with: NSRange(location: typeStart, length: j - typeStart))
         return CalloutMarker(
             type: type,
-            markerRange: NSRange(location: i, length: (j + 1) - i)
+            markerRange: NSRange(location: i, length: markerEnd - i)
         )
     }
 

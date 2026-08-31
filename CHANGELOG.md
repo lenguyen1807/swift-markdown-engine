@@ -69,6 +69,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Inline `$…$` treats `[ ] ( )` as mathy, so `$Z[i,j]$` and `$O(BFD)$` render
   as math instead of leftover dollars around an incomplete-link look.
+- Display math `$$…$$` nested in a blockquote or callout tokenizes and
+  renders (quote prefixes are stripped before typesetting). Unquoted formula
+  lines between `> $$` markers lazy-continue in the quote, matching CommonMark.
+  A `$$` line that is not quoted still opens its own block. Fold `+`/`-`
+  after `[!type]` is not part of the label.
 - Rendered tables: slightly more cell padding, softer separators, and a
   stronger header-row fill so grids match a tuned editor theme.
 - An ordered list's painted number no longer reverts to the source digit under

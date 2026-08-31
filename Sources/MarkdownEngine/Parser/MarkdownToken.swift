@@ -58,7 +58,48 @@ extension MarkdownToken {
         )
         let mutableParagraph = paragraphText.mutableCopy() as! NSMutableString
         mutableParagraph.replaceCharacters(in: tokenRelativeRange, with: "")
-        return mutableParagraph.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? paragraphRange : nil
+        let leftover = mutableParagraph as String
+        if leftover.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return paragraphRange }
+        // Quoted display math: stripping `$$…$$` leaves the `>` prefixes.
+        return Self.isOnlyBlockquotePrefixes(leftover) ? paragraphRange : nil
+    }
+
+    /// True when every line is blank or a blockquote marker with no other content.
+    private static func isOnlyBlockquotePrefixes(_ text: String) -> Bool {
+        let ns = text as NSString
+        var lineStart = 0
+        let len = ns.length
+        while lineStart < len {
+            var lineEnd = lineStart
+            while lineEnd < len {
+                let ch = ns.character(at: lineEnd)
+                if ch == 0x0A || ch == 0x0D { break }
+                lineEnd += 1
+            }
+            var i = lineStart
+            var indent = 0
+            while i < lineEnd, indent < 3 {
+                let ch = ns.character(at: i)
+                guard ch == 0x20 || ch == 0x09 else { break }
+                i += 1; indent += 1
+            }
+            while i < lineEnd, ns.character(at: i) == 0x3E {
+                i += 1
+                if i < lineEnd {
+                    let ch = ns.character(at: i)
+                    if ch == 0x20 || ch == 0x09 { i += 1 }
+                }
+            }
+            while i < lineEnd {
+                let ch = ns.character(at: i)
+                if ch != 0x20 && ch != 0x09 { return false }
+                i += 1
+            }
+            lineStart = lineEnd
+            if lineStart < len, ns.character(at: lineStart) == 0x0D { lineStart += 1 }
+            if lineStart < len, ns.character(at: lineStart) == 0x0A { lineStart += 1 }
+        }
+        return true
     }
 
     func containsSelectionOrStandaloneParagraph(_ selectionLocation: Int, in text: NSString) -> Bool {
